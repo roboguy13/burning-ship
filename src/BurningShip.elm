@@ -6,7 +6,6 @@ import Html exposing (Html, button, div, text, node)
 import Html.Events exposing (onClick)
 
 import List exposing (map, range)
-import Array exposing (Array)
 
 import Complex exposing (toCartesian, real, complex)
 
@@ -110,12 +109,11 @@ pixelColor : Float -> Float -> Color
 pixelColor x y =
   coordColor (complex x y)
 
-genCoords : Int -> Int -> Float -> Float -> Array Float -> Array Float
-genCoords max count start incr currArr =
+genCoords : Int -> Int -> Float -> Float -> List (Int, Float)
+genCoords max count start incr =
   if count == 0
-  then set 0 start currArr
-  else genCoords max (count-1) (start+incr) incr (set count start currArr)
-  -- else (max - count, start) :: genCoords max (count-1) (start + incr) incr
+  then []
+  else (max - count, start) :: genCoords max (count-1) (start + incr) incr
 
 generatePixelColors : Shift -> Float -> Size -> List (Point, Color)
 generatePixelColors {xShift, yShift} zoom size =
@@ -128,14 +126,9 @@ generatePixelColors {xShift, yShift} zoom size =
       go currYInt currY =
         if currYInt >= size.height
         then []
-        else
-          Array.foldr
-            (\(xInt, x) currArr -> )
-            xCoords
-            (Array.intialize 
-        -- else Array.map (\(xInt, x) -> ({x = xInt, y = currYInt}, pixelColor (x*zoom) (currY*zoom)))
-        --          xCoords
-        --             ++ go (currYInt+1) (currY+yIncr)
+        else map (\(xInt, x) -> ({x = xInt, y = currYInt}, pixelColor (x*zoom) (currY*zoom)))
+                 xCoords
+                    ++ go (currYInt+1) (currY+yIncr)
   in
       go 0 (yMin + toFloat yShift*yIncr)
 
