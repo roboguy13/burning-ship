@@ -1,0 +1,9 @@
+*.old
+elm-stuff/
+.*.swp
+deps/elm-canvas/.git
+deps/elm-canvas/.vimrc
+deps/elm-canvas/elm-stuff
+BurningShip.js
+opt-elm.js
+elm.min.js
