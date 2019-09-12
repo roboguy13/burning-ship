@@ -1,7 +1,7 @@
 import Browser
 import Html exposing (Html, button, div, text, node)
 import WebGL exposing (Shader, Mesh)
-import Math.Vector2 exposing (Vec2)
+import Math.Vector2 exposing (Vec2, getX, getY, setX, setY, vec2)
 import Math.Vector3 exposing (Vec3, vec3)
 import Html.Attributes as Attributes exposing (style)
 import Json.Decode as Decode
@@ -22,20 +22,26 @@ type alias Point =
   , y : Int
   }
 
-type alias Shift =
-  { xShift : Int
-  , yShift : Int
-  }
+type alias Shift = Vec2
 
 
 noShift : Shift
-noShift = { xShift=0, yShift=0 }
+noShift = vec2 0 0
 
-shiftXBy : Int -> Shift -> Shift
-shiftXBy x {xShift, yShift} = {xShift=clamp0 (xShift+x), yShift=yShift}
+-- shiftXBy : Int -> Shift -> Shift
+-- shiftXBy x {xShift, yShift} = {xShift=clamp0 (xShift+x), yShift=yShift}
 
-shiftYBy : Int -> Shift -> Shift
-shiftYBy y {xShift, yShift} = {xShift=xShift, yShift=clamp0 (yShift+y)}
+shiftPixels : Int
+shiftPixels = 4
+
+shiftXBy : Size -> Float -> Int -> Shift -> Shift
+shiftXBy {width} zoom x shift = setX (getX shift + (toFloat (x * shiftPixels) * zoom / toFloat width)) shift
+
+shiftYBy : Size -> Float -> Int -> Shift -> Shift
+shiftYBy {height} zoom y shift = setY (getY shift + (toFloat (y * shiftPixels) * zoom / toFloat height)) shift
+
+-- shiftYBy : Int -> Shift -> Shift
+-- shiftYBy y {xShift, yShift} = {xShift=xShift, yShift=clamp0 (yShift+y)}
 
 clamp0 : Int -> Int
 clamp0 a =
@@ -87,21 +93,21 @@ main =
     , view = view
     }
 
-update maybeDir ({currShift, zoom} as model) =
+update maybeDir ({viewportSize, currShift, zoom} as model) =
   let shiftAmount = 30
-      zoomIncr = 0.1
+      zoomMult = 0.9
   in
   case maybeDir of
     Nothing -> ({model | redraw = False}, Cmd.none)
-    Just Up -> ({model | redraw = True, currShift = shiftYBy shiftAmount currShift}, Cmd.none)
-    Just Down -> ({model | redraw = True, currShift = shiftYBy (-shiftAmount) currShift}, Cmd.none)
-    Just Left -> ({model | redraw = True, currShift = shiftXBy (-shiftAmount) currShift}, Cmd.none)
-    Just Right -> ({model | redraw = True, currShift = shiftXBy shiftAmount currShift}, Cmd.none)
-    Just (Zoom In) -> ({model | redraw = True, zoom = zoom - zoomIncr}, Cmd.none)
-    Just (Zoom Out) -> ({model | redraw = True, zoom = zoom + zoomIncr}, Cmd.none)
+    Just Up -> ({model | redraw = True, currShift = shiftYBy viewportSize zoom (-shiftAmount) currShift}, Cmd.none)
+    Just Down -> ({model | redraw = True, currShift = shiftYBy viewportSize zoom shiftAmount currShift}, Cmd.none)
+    Just Left -> ({model | redraw = True, currShift = shiftXBy viewportSize zoom (-shiftAmount) currShift}, Cmd.none)
+    Just Right -> ({model | redraw = True, currShift = shiftXBy viewportSize zoom shiftAmount currShift}, Cmd.none)
+    Just (Zoom In) -> ({model | redraw = True, zoom = zoom * zoomMult}, Cmd.none)
+    Just (Zoom Out) -> ({model | redraw = True, zoom = zoom / zoomMult}, Cmd.none)
 
 view : Model -> Html msg
-view {viewportSize, drawSize, currShift, zoom, redraw} =
+view ({viewportSize, drawSize, currShift, zoom, redraw} as model) =
   div
     []
     [WebGL.toHtml
@@ -116,7 +122,7 @@ view {viewportSize, drawSize, currShift, zoom, redraw} =
           vertexShader
           fragmentShader
           mesh
-          Uniforms]]
+          model]]
 
 mesh : Mesh { position : Vec3 }
 mesh =
@@ -146,9 +152,9 @@ toDirection str =
     "x" -> Just (Zoom Out)
     _   -> Nothing
 
-type Uniforms = Uniforms
+-- type Uniforms = Uniforms
 
-vertexShader : Shader { position : Vec3 } Uniforms { vFragCoord : Vec2 }
+vertexShader : Shader { position : Vec3 } Model { vFragCoord : Vec2 }
 vertexShader =
   [glsl|
     varying vec2 vFragCoord;
@@ -160,11 +166,13 @@ vertexShader =
     }
   |]
 
-fragmentShader : Shader {} Uniforms { vFragCoord : Vec2 }
+fragmentShader : Shader {} Model { vFragCoord : Vec2 }
 fragmentShader =
   [glsl|
-    precision mediump float;
+    precision highp float;
     varying vec2 vFragCoord;
+    uniform float zoom;
+    uniform vec2 currShift;
 
     // const int MAX_ITERS = 511;
     const int MAX_ITERS = 255;
@@ -197,7 +205,7 @@ fragmentShader =
       vec2 z = vec2(0, 0);
 
       for (int iters = 0; iters < MAX_ITERS; ++iters) {
-        if (length(z) > 2.0) {
+        if (z*z > 4.0) {
           return iters;
         }
 
@@ -237,8 +245,16 @@ fragmentShader =
       return vec2(v.x * X_INCR, v.y * -Y_INCR);
     }
 
+    vec2 zoomCoord(vec2 v) {
+      return vec2(v.x * zoom, v.y * zoom);
+    }
+
+    vec2 panCoord(vec2 v) {
+      return vec2(v.x + currShift.x, v.y + currShift.y);
+    }
+
     void main() {
-      gl_FragColor = coordColor(rescaleCoord(vFragCoord));
+      gl_FragColor = coordColor(panCoord(zoomCoord(rescaleCoord(vFragCoord))));
     }
   |]
 
