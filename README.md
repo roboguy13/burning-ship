@@ -14,3 +14,11 @@ WASD keys pan around and 'z' zooms in and 'x' zooms out (NOTE: The project is so
 slow at the moment that these controls, while they seem to work, are not very
 useful).
 
+# GLSL version
+
+To make an optimized build of the GLSL version of the project, run:
+
+    ./optimize_GL.sh src/BurningShip_GL.elm
+
+Then open `index_GL.html` in a browser to run it.
+
