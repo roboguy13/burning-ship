@@ -169,15 +169,14 @@ vertexShader =
 fragmentShader : Shader {} Model { vFragCoord : Vec2 }
 fragmentShader =
   [glsl|
-
     precision highp float;
 
     varying vec2 vFragCoord;
     uniform float zoom;
     uniform vec2 currShift;
 
-    const int MAX_ITERS = 511;
-    //const int MAX_ITERS = 255;
+    //const int MAX_ITERS = 511;
+    const int MAX_ITERS = 255;
     const float MAX_ITERS_f = float(MAX_ITERS);
 
     const float X_MIN = -2.5;
@@ -347,9 +346,9 @@ fragmentShader =
       if (iters < 0) {
         return vec4(0, 0, 0, 1);
       } else {
-        //float adjIters = float(iters + 180);
+        float adjIters = float(iters + 180);
 
-        float adjIters = float(iters + 350);
+        //float adjIters = float(iters + 350);
 
         return vec4(hsl2rgb(vec3(
                 mod(adjIters, MAX_ITERS_f) / MAX_ITERS_f,
