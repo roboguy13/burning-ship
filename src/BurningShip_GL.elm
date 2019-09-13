@@ -169,13 +169,15 @@ vertexShader =
 fragmentShader : Shader {} Model { vFragCoord : Vec2 }
 fragmentShader =
   [glsl|
+
     precision highp float;
+
     varying vec2 vFragCoord;
     uniform float zoom;
     uniform vec2 currShift;
 
-    // const int MAX_ITERS = 511;
-    const int MAX_ITERS = 255;
+    const int MAX_ITERS = 511;
+    //const int MAX_ITERS = 255;
     const float MAX_ITERS_f = float(MAX_ITERS);
 
     const float X_MIN = -2.5;
@@ -189,23 +191,135 @@ fragmentShader =
     const float X_INCR = X_MAX - X_MIN;
     const float Y_INCR = Y_MAX - Y_MIN;
 
-    vec2 complexMult(vec2 a, vec2 b) {
-      return vec2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x);
+
+    /***** This block of code is from here (this emulates double-precision floating point arithmetic): https://www.thasler.com/blog/blog/glsl-part2-emu *****/
+    vec2 ds_set(float a)
+    {
+      vec2 z;
+      z.x = a;
+      z.y = 0.0;
+      return z;
     }
 
-    vec2 complexSquare(vec2 a) {
+    vec2 ds_add (vec2 dsa, vec2 dsb)
+    {
+      vec2 dsc;
+      float t1, t2, e;
+
+      t1 = dsa.x + dsb.x;
+      e = t1 - dsa.x;
+      t2 = ((dsb.x - e) + (dsa.x - (t1 - e))) + dsa.y + dsb.y;
+
+      dsc.x = t1 + t2;
+      dsc.y = t2 - (dsc.x - t1);
+      return dsc;
+    }
+
+    vec2 ds_mul (vec2 dsa, vec2 dsb)
+    {
+      vec2 dsc;
+      float c11, c21, c2, e, t1, t2;
+      float a1, a2, b1, b2, cona, conb, split = 8193.;
+
+      cona = dsa.x * split;
+      conb = dsb.x * split;
+      a1 = cona - (cona - dsa.x);
+      b1 = conb - (conb - dsb.x);
+      a2 = dsa.x - a1;
+      b2 = dsb.x - b1;
+
+      c11 = dsa.x * dsb.x;
+      c21 = a2 * b2 + (a2 * b1 + (a1 * b2 + (a1 * b1 - c11)));
+
+      c2 = dsa.x * dsb.y + dsa.y * dsb.x;
+
+      t1 = c11 + c2;
+      e = t1 - c11;
+      t2 = dsa.y * dsb.y + ((c2 - e) + (c11 - (t1 - e))) + c21;
+
+      dsc.x = t1 + t2;
+      dsc.y = t2 - (dsc.x - t1);
+
+      return dsc;
+    }
+    // Substract: res = ds_sub(a, b) => res = a - b
+    vec2 ds_sub (vec2 dsa, vec2 dsb)
+    {
+    vec2 dsc;
+    float e, t1, t2;
+
+     t1 = dsa.x - dsb.x;
+     e = t1 - dsa.x;
+     t2 = ((-dsb.x - e) + (dsa.x - (t1 - e))) + dsa.y - dsb.y;
+
+     dsc.x = t1 + t2;
+     dsc.y = t2 - (dsc.x - t1);
+     return dsc;
+    }
+
+    // Compare: res = -1 if a < b
+    //              = 0 if a == b
+    //              = 1 if a > b
+    float ds_compare(vec2 dsa, vec2 dsb)
+    {
+     if (dsa.x < dsb.x) return -1.;
+     else if (dsa.x == dsb.x)
+            {
+            if (dsa.y < dsb.y) return -1.;
+            else if (dsa.y == dsb.y) return 0.;
+            else return 1.;
+            }
+     else return 1.;
+    }
+    /***** End of block from https://www.thasler.com/blog/blog/glsl-part2-emu *****/
+
+    vec2 ds_abs(vec2 ds) {
+      return vec2(abs(ds.x), abs(ds.y));
+    }
+
+    struct complex {
+      vec2 re, im;
+    };
+
+    complex complexMult(complex v, complex w) {
+      complex z;
+
+      z.re = ds_sub(ds_mul(v.re, w.re), ds_mul(v.im, w.im));
+      z.im = ds_add(ds_mul(v.re, w.im), ds_mul(v.im, w.re));
+      return z;
+    }
+
+    complex complexAdd(complex v, complex w) {
+      complex result;
+      result.im = ds_add(v.im, w.im);
+      result.re = ds_add(v.re, w.re);
+      return result;
+    }
+
+    complex complexSquare(complex a) {
       return complexMult(a, a);
     }
 
-    vec2 nextZ(vec2 c, vec2 z) {
-      return complexSquare(vec2(abs(z.x), abs(z.y))) + c;
+    vec2 complexDot(complex v, complex w) {
+      return ds_add(ds_mul(v.im, w.im), ds_mul(v.re, w.re));
     }
 
-    int escapesAt(vec2 c) {
-      vec2 z = vec2(0, 0);
+    complex nextZ(complex c, complex z) {
+      complex absed;
+      absed.im = ds_abs(z.im);
+      absed.re = ds_abs(z.re);
+
+      return complexAdd(complexSquare(absed), c);
+    }
+
+    int escapesAt(complex c) {
+      complex z;
+      z.im = ds_set(0.0);
+      z.re = ds_set(0.0);
 
       for (int iters = 0; iters < MAX_ITERS; ++iters) {
-        if (z*z > 4.0) {
+        // if dot(z, z) > 4 ...
+        if (ds_compare(complexDot(z,z), ds_set(4.0)) > 0.0) {
           return iters;
         }
 
@@ -224,13 +338,19 @@ fragmentShader =
     }
 
 
-    vec4 coordColor(vec2 c) {
+    vec4 coordColor(vec2 coord) {
+      complex c;
+      c.im = ds_set(coord.y);
+      c.re = ds_set(coord.x);
       int iters = escapesAt(c);
 
       if (iters < 0) {
         return vec4(0, 0, 0, 1);
       } else {
-        float adjIters = float(iters + 180);
+        //float adjIters = float(iters + 180);
+
+        float adjIters = float(iters + 350);
+
         return vec4(hsl2rgb(vec3(
                 mod(adjIters, MAX_ITERS_f) / MAX_ITERS_f,
                 1,
