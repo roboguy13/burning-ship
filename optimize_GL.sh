@@ -2,8 +2,8 @@
 
 set -e
 
-js="GL_opt-elm.js"
-min="GL_elm.min.js"
+js="docs/GL_opt-elm.js"
+min="docs/GL_elm.min.js"
 
 elm make --optimize --output=$js $@
 

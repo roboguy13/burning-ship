@@ -7,5 +7,5 @@ deps/elm-canvas/elm-stuff
 BurningShip.js
 BurningShip_GL.js
 *opt-elm.js
-*elm.min.js
+elm.min.js
 
