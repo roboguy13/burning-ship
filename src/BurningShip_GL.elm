@@ -9,8 +9,8 @@ import Browser.Events exposing (onKeyDown)
 
 type Zoom = In | Out
 
-type Direction =
-  Up | Down | Left | Right | Zoom Zoom
+type Command =
+  Up | Down | Left | Right | Zoom Zoom | ToggleFractal
 
 type alias Size =
   { width  : Int
@@ -28,9 +28,6 @@ type alias Shift = Vec2
 noShift : Shift
 noShift = vec2 0 0
 
--- shiftXBy : Int -> Shift -> Shift
--- shiftXBy x {xShift, yShift} = {xShift=clamp0 (xShift+x), yShift=yShift}
-
 shiftPixels : Int
 shiftPixels = 4
 
@@ -39,9 +36,6 @@ shiftXBy {width} zoom x shift = setX (getX shift + (toFloat (x * shiftPixels) * 
 
 shiftYBy : Size -> Float -> Int -> Shift -> Shift
 shiftYBy {height} zoom y shift = setY (getY shift + (toFloat (y * shiftPixels) * zoom / toFloat height)) shift
-
--- shiftYBy : Int -> Shift -> Shift
--- shiftYBy y {xShift, yShift} = {xShift=xShift, yShift=clamp0 (yShift+y)}
 
 clamp0 : Int -> Int
 clamp0 a =
@@ -73,9 +67,25 @@ type alias Model =
   , currShift : Shift
   , zoom : Float
   , redraw : Bool
+  , one : Float
+  , whichFractal : Float -- 0 means burning ship, 1 means Mandelbrot
   }
 
-type alias Msg = Maybe Direction
+selectBurningShip : Float
+selectBurningShip = 0
+
+selectMandelbrot : Float
+selectMandelbrot = 1
+
+-- | Assumes that input is correctly either `selectBurningShip` or
+-- `selectMandelbrot`
+toggleFractal : Float -> Float
+toggleFractal x =
+  if x == selectBurningShip
+  then selectMandelbrot
+  else selectBurningShip
+
+type alias Msg = Maybe Command
 
 defaultViewportSize : Size
 defaultViewportSize =
@@ -86,14 +96,14 @@ defaultViewportSize =
 main : Program (List Int) Model Msg
 main =
     Browser.element
-    { init = \dims -> ((case dims of [width, height] -> {viewportSize={width=width, height=height}, drawSize={width=width, height=adjustedHeight width}, currShift=noShift, zoom=1, redraw=True}
-                                     _ -> {viewportSize=defaultViewportSize, drawSize={width=defaultViewportSize.width, height=adjustedHeight defaultViewportSize.width}, currShift=noShift, zoom=1, redraw=True}), Cmd.none)
+    { init = \dims -> ((case dims of [width, height] -> {viewportSize={width=width, height=height}, drawSize={width=width, height=adjustedHeight width}, currShift=noShift, zoom=1, redraw=True, one=1, whichFractal=selectBurningShip}
+                                     _ -> {viewportSize=defaultViewportSize, drawSize={width=defaultViewportSize.width, height=adjustedHeight defaultViewportSize.width}, currShift=noShift, zoom=1, redraw=True, one=1, whichFractal=selectBurningShip}), Cmd.none)
     , update = update
     , subscriptions = \_ -> onKeyDown directionKeyDecoder
     , view = view
     }
 
-update maybeDir ({viewportSize, currShift, zoom} as model) =
+update maybeDir ({viewportSize, currShift, zoom, whichFractal} as model) =
   let shiftAmount = 30
       zoomMult = 0.9
   in
@@ -105,6 +115,7 @@ update maybeDir ({viewportSize, currShift, zoom} as model) =
     Just Right -> ({model | redraw = True, currShift = shiftXBy viewportSize zoom shiftAmount currShift}, Cmd.none)
     Just (Zoom In) -> ({model | redraw = True, zoom = zoom * zoomMult}, Cmd.none)
     Just (Zoom Out) -> ({model | redraw = True, zoom = zoom / zoomMult}, Cmd.none)
+    Just ToggleFractal -> ({model | redraw = True, whichFractal = toggleFractal whichFractal}, Cmd.none)
 
 view : Model -> Html msg
 view ({viewportSize, drawSize, currShift, zoom, redraw} as model) =
@@ -137,12 +148,12 @@ mesh =
         )
       ]
 
-directionKeyDecoder : Decode.Decoder (Maybe Direction)
+directionKeyDecoder : Decode.Decoder (Maybe Command)
 directionKeyDecoder =
-  Decode.map toDirection (Decode.field "key" Decode.string)
+  Decode.map toCommand (Decode.field "key" Decode.string)
 
-toDirection : String -> Maybe Direction
-toDirection str =
+toCommand : String -> Maybe Command
+toCommand str =
   case str of
     "w" -> Just Up
     "s" -> Just Down
@@ -150,6 +161,7 @@ toDirection str =
     "d" -> Just Right
     "z" -> Just (Zoom In)
     "x" -> Just (Zoom Out)
+    "t" -> Just ToggleFractal
     _   -> Nothing
 
 -- type Uniforms = Uniforms
@@ -172,8 +184,11 @@ fragmentShader =
     precision highp float;
 
     varying vec2 vFragCoord;
+
+    uniform float whichFractal;
     uniform float zoom;
     uniform vec2 currShift;
+    uniform float one;
 
     //const int MAX_ITERS = 511;
     const int MAX_ITERS = 255;
@@ -191,68 +206,35 @@ fragmentShader =
     const float Y_INCR = Y_MAX - Y_MIN;
 
 
-    /***** This block of code is from here (this emulates double-precision floating point arithmetic): https://www.thasler.com/blog/blog/glsl-part2-emu *****/
-    vec2 ds_set(float a)
-    {
-      vec2 z;
-      z.x = a;
-      z.y = 0.0;
-      return z;
-    }
-
+    /***** This block of code is from here (this emulates double-precision floating point arithmetic): https://github.com/10110111/QSMandel/blob/master/EmuMandel.fsh *****/
+    // Emulation based on Fortran-90 double-single package. See http://crd-legacy.lbl.gov/~dhbailey/mpdist/
+    // Add: res = ds_add(a, b) => res = a + b
     vec2 ds_add (vec2 dsa, vec2 dsb)
     {
-      vec2 dsc;
-      float t1, t2, e;
+    vec2 dsc;
+    float t1, t2, e;
 
-      t1 = dsa.x + dsb.x;
-      e = t1 - dsa.x;
-      t2 = ((dsb.x - e) + (dsa.x - (t1 - e))) + dsa.y + dsb.y;
+     t1 = dsa.x + dsb.x;
+     e = (t1*one) - dsa.x;
+     t2 = ((dsb.x - e) + (dsa.x - (t1 - e))) + dsa.y + dsb.y;
 
-      dsc.x = t1 + t2;
-      dsc.y = t2 - (dsc.x - t1);
-      return dsc;
+     dsc.x = t1 + t2;
+     dsc.y = t2 - ((dsc.x*one) - t1);
+     return dsc;
     }
 
-    vec2 ds_mul (vec2 dsa, vec2 dsb)
-    {
-      vec2 dsc;
-      float c11, c21, c2, e, t1, t2;
-      float a1, a2, b1, b2, cona, conb, split = 8193.;
-
-      cona = dsa.x * split;
-      conb = dsb.x * split;
-      a1 = cona - (cona - dsa.x);
-      b1 = conb - (conb - dsb.x);
-      a2 = dsa.x - a1;
-      b2 = dsb.x - b1;
-
-      c11 = dsa.x * dsb.x;
-      c21 = a2 * b2 + (a2 * b1 + (a1 * b2 + (a1 * b1 - c11)));
-
-      c2 = dsa.x * dsb.y + dsa.y * dsb.x;
-
-      t1 = c11 + c2;
-      e = t1 - c11;
-      t2 = dsa.y * dsb.y + ((c2 - e) + (c11 - (t1 - e))) + c21;
-
-      dsc.x = t1 + t2;
-      dsc.y = t2 - (dsc.x - t1);
-
-      return dsc;
-    }
-    // Substract: res = ds_sub(a, b) => res = a - b
+    // Subtract: res = ds_sub(a, b) => res = a - b
     vec2 ds_sub (vec2 dsa, vec2 dsb)
     {
     vec2 dsc;
     float e, t1, t2;
 
      t1 = dsa.x - dsb.x;
-     e = t1 - dsa.x;
+     e = (t1*one) - dsa.x;
      t2 = ((-dsb.x - e) + (dsa.x - (t1 - e))) + dsa.y - dsb.y;
 
      dsc.x = t1 + t2;
-     dsc.y = t2 - (dsc.x - t1);
+     dsc.y = t2 - ((dsc.x*one) - t1);
      return dsc;
     }
 
@@ -262,7 +244,7 @@ fragmentShader =
     float ds_compare(vec2 dsa, vec2 dsb)
     {
      if (dsa.x < dsb.x) return -1.;
-     else if (dsa.x == dsb.x)
+     else if (dsa.x == dsb.x) 
             {
             if (dsa.y < dsb.y) return -1.;
             else if (dsa.y == dsb.y) return 0.;
@@ -270,7 +252,45 @@ fragmentShader =
             }
      else return 1.;
     }
-    /***** End of block from https://www.thasler.com/blog/blog/glsl-part2-emu *****/
+
+    // Multiply: res = ds_mul(a, b) => res = a * b
+    vec2 ds_mul (vec2 dsa, vec2 dsb)
+    {
+    vec2 dsc;
+    float c11, c21, c2, e, t1, t2;
+    float a1, a2, b1, b2, cona, conb, split = 8193.;
+
+     cona = dsa.x * split;
+     conb = dsb.x * split;
+     a1 = cona - ((cona*one) - dsa.x);
+     b1 = conb - ((conb*one) - dsb.x);
+     a2 = dsa.x - a1;
+     b2 = dsb.x - b1;
+
+     c11 = dsa.x * dsb.x;
+     c21 = a2 * b2 + (a2 * b1 + (a1 * b2 + (a1 * b1 - c11)));
+
+     c2 = dsa.x * dsb.y + dsa.y * dsb.x;
+
+     t1 = c11 + c2;
+     e = t1 - (c11*one);
+     t2 = dsa.y * dsb.y + ((c2 - e) + (c11 - (t1 - e))) + c21;
+     
+     dsc.x = t1 + t2;
+     dsc.y = t2 - ((dsc.x*one) - t1);
+     
+     return dsc;
+    }
+
+    // create double-single number from float
+    vec2 ds_set(float a)
+    {
+     vec2 z;
+     z.x = a;
+     z.y = 0.0;
+     return z;
+    }
+    /***** End of block *****/
 
     vec2 ds_abs(vec2 ds) {
       return vec2(abs(ds.x), abs(ds.y));
@@ -305,8 +325,20 @@ fragmentShader =
 
     complex nextZ(complex c, complex z) {
       complex absed;
-      absed.im = ds_abs(z.im);
-      absed.re = ds_abs(z.re);
+      // absed.re = ds_dot(whichFractal, vec2(ds_abs(z.re), z.re));
+      // absed.im = ds_dot(whichFractal, vec2(ds_abs(z.im), z.im));
+
+      // absed.re = ds_abs(z.re);
+      // absed.im = ds_abs(z.im);
+
+      vec2 reAbs = ds_abs(z.re);
+      vec2 imAbs = ds_abs(z.im);
+
+      absed.re.x = mix(reAbs.x, z.re.x, whichFractal);
+      absed.re.y = mix(reAbs.y, z.re.y, whichFractal);
+
+      absed.im.x = mix(imAbs.x, z.im.x, whichFractal);
+      absed.im.y = mix(imAbs.y, z.im.y, whichFractal);
 
       return complexAdd(complexSquare(absed), c);
     }
